@@ -3641,9 +3641,55 @@ void LSRInstance::CollectFixupsAndInitialFormulae() {
                                HardwareLoopProfitable);
       VisitedLSRUse.insert(LUIdx);
     }
-
+    
     // If this is the first use of this LSRUse, give it a formula.
     if (LU.Formulae.empty()) {
+      // Avoid creating loop-carried scaled IVs when all fixups are
+      // outside the loop. In patterns like {-C,+,C}, LSR may precompute
+      // values that are only consumed after loop exit, introducing
+      // unnecessary add instructions in the hot loop.
+      //
+      // Keep the original behavior for multiply users such as PR15470.
+      if (LU.AllFixupsOutsideLoop && LU.Kind == LSRUse::Basic) {
+        if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(S)) {
+          const SCEV *Step = AR->getStepRecurrence(SE);
+
+          if (isa<SCEVConstant>(Step) &&
+              !Step->isOne() &&
+              !Step->isAllOnesValue() &&
+              isa<SCEVConstant>(AR->getStart())) {
+
+            const APInt &StepVal =
+                cast<SCEVConstant>(Step)->getAPInt();
+            const APInt &StartVal =
+                cast<SCEVConstant>(AR->getStart())->getAPInt();
+
+            if (StartVal == -StepVal) {
+              bool HasMulUser = false;
+
+              for (const LSRFixup &Fix : LU.Fixups) {
+                auto *BO = dyn_cast<BinaryOperator>(Fix.UserInst);
+
+                if (BO && BO->getOpcode() == Instruction::Mul) {
+                  HasMulUser = true;
+                  break;
+                }
+              }
+
+              if (!HasMulUser) {
+                LLVM_DEBUG({
+                  dbgs() << "LSR: skipping outside-loop scalar shift IV: ";
+                  S->print(dbgs());
+                  dbgs() << '\n';
+                });
+
+                continue;
+              }
+            }
+          }
+        }
+      }
+
       InsertInitialFormula(S, LU, LUIdx);
       CountRegisters(LU.Formulae.back(), LUIdx);
     }
