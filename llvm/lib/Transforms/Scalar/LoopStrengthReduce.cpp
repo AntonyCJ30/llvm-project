@@ -3677,12 +3677,11 @@ void LSRInstance::CollectFixupsAndInitialFormulae() {
               }
 
               if (!HasMulUser) {
-                LLVM_DEBUG({
-                  dbgs() << "LSR: skipping outside-loop scalar shift IV: ";
-                  S->print(dbgs());
-                  dbgs() << '\n';
-                });
-
+                Formula F;
+                F.BaseRegs.push_back(S);
+                F.HasBaseReg = true;
+                if (LU.InsertFormula(F, *L))
+                  CountRegisters(F, LUIdx);
                 continue;
               }
             }
