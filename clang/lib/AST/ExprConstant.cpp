@@ -974,9 +974,11 @@ namespace {
       // of each element is likely to take some number of steps anyway.
       uint64_t Limit = getLangOpts().ConstexprStepLimit;
       if (Limit != 0 && ElemCount > Limit) {
-        if (Diag)
-          FFDiag(Loc, diag::note_constexpr_new_exceeds_limits)
+        if (Diag) {
+          FFDiag(Loc, diag::note_constexpr_new_exceeds_limits, 1)
               << ElemCount << Limit;
+          Note(Loc, diag::note_constexpr_steps);
+        }
         return false;
       }
       return true;
@@ -1003,7 +1005,9 @@ namespace {
         return true;
 
       if (!StepsLeft) {
-        FFDiag(S->getBeginLoc(), diag::note_constexpr_step_limit_exceeded);
+        FFDiag(S->getBeginLoc(), diag::note_constexpr_step_limit_exceeded, 1)
+            << getLangOpts().ConstexprStepLimit;
+        Note(S->getBeginLoc(), diag::note_constexpr_steps);
         return false;
       }
       --StepsLeft;
@@ -3264,8 +3268,17 @@ static bool HandleLValueMember(EvalInfo &Info, const Expr *E, LValue &LVal,
                                const FieldDecl *FD,
                                const ASTRecordLayout *RL = nullptr) {
   if (!RL) {
-    if (FD->getParent()->isInvalidDecl()) return false;
-    RL = &Info.Ctx.getASTRecordLayout(FD->getParent());
+    const RecordDecl *RD = FD->getParent();
+    if (RD->isInvalidDecl())
+      return false;
+    // There are some cases where the base is not yet complete but we haven't
+    // disagnosed (such as in a template instantation of an attribute that
+    // references the expression, ala enable_if).  These aren't necessarily
+    // constant expressions so we return 'false', but they might be, so we don't
+    // diagnose.
+    if (!RD->isCompleteDefinition())
+      return false;
+    RL = &Info.Ctx.getASTRecordLayout(RD);
   }
 
   unsigned I = FD->getFieldIndex();
@@ -20385,7 +20398,8 @@ static bool TryEvaluateBuiltinNaN(const ASTContext &Context,
                                   bool SNaN,
                                   llvm::APFloat &Result) {
   const StringLiteral *S = dyn_cast<StringLiteral>(Arg->IgnoreParenCasts());
-  if (!S) return false;
+  if (!S || !S->isOrdinary())
+    return false;
 
   const llvm::fltSemantics &Sem = Context.getFloatTypeSemantics(ResultTy);
 
